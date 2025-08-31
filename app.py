@@ -5,7 +5,7 @@ import google.generativeai as genai
 import datetime
 
 # 🔑 Load API key from Streamlit Secrets (secure way)
-genai.configure(api_key=st.secrets["AIzaSyBeRlo9dDomco6D0YZ7qg84mgyY8P2BUUU"])
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # Chat model
 model = genai.GenerativeModel("gemini-1.5-flash")
