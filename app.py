@@ -1,85 +1,50 @@
+# app.py - RoboMind Chatbot with Date/Time + Conversation History
+
 import streamlit as st
 import google.generativeai as genai
 import datetime
-import time
 
-# ✅ Configure API Key
+# 🔑 Load API key from Streamlit Secrets (secure way)
 genai.configure(api_key=st.secrets["AIzaSyBeRlo9dDomco6D0YZ7qg84mgyY8P2BUUU"])
 
-# Initialize model
-model = genai.GenerativeModel("gemini-pro")
+# Chat model
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-# ✅ Initialize session state
+# Page config
+st.set_page_config(page_title="🤖 RoboMind Chatbot", layout="centered")
+
+st.title("🤖 RoboMind Chatbot")
+st.write("Your AI assistant that remembers context, tells date/time, and chats like WhatsApp!")
+
+# Initialize session state for messages
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "day_counter" not in st.session_state:
-    st.session_state.day_counter = 1
-if "reminders" not in st.session_state:
-    st.session_state.reminders = []
 
-# ✅ Function to check date/time
-def get_datetime_response(user_input):
-    now = datetime.datetime.now()
-    if "time" in user_input.lower():
-        return f"⏰ The current time is {now.strftime('%I:%M %p')}."
-    elif "date" in user_input.lower():
-        return f"📅 Today's date is {now.strftime('%A, %d %B %Y')}."
-    elif "day" in user_input.lower():
-        return f"📅 This is Day {st.session_state.day_counter} of RoboMind."
-    return None
-
-# ✅ Function to add reminders
-def set_reminder(user_input):
-    if "remind me" in user_input.lower():
-        try:
-            minutes = [int(s) for s in user_input.split() if s.isdigit()][0]
-            reminder_time = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
-            st.session_state.reminders.append(reminder_time)
-            return f"⏰ Reminder set for {minutes} minutes from now!"
-        except:
-            return "⚠️ Couldn't set reminder. Please say like: 'Remind me in 2 minutes'."
-    return None
-
-# ✅ Streamlit layout
-st.title("🤖 RoboMind Chatbot")
-st.markdown("Your personal AI assistant with reminders, time/date, and chat history.")
-
-chat_container = st.container()
-
-# ✅ Display messages in WhatsApp-style
-with chat_container:
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            st.markdown(f"<div style='background:#DCF8C6; padding:8px; border-radius:8px; margin:4px; text-align:right'>{msg['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div style='background:#ECECEC; padding:8px; border-radius:8px; margin:4px; text-align:left'>{msg['content']}</div>", unsafe_allow_html=True)
-
-# ✅ User input box
-user_input = st.chat_input("Type your message here...")
+# User input
+user_input = st.chat_input("Type your message...")
 
 if user_input:
     # Save user message
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # Check special cases (date/time/reminder)
-    response = get_datetime_response(user_input)
-    if not response:
-        response = set_reminder(user_input)
+    # Special: handle date & time
+    if "time" in user_input.lower() or "date" in user_input.lower() or "day" in user_input.lower():
+        now = datetime.datetime.now()
+        bot_reply = f"📅 Today is **{now.strftime('%A, %d %B %Y')}** and the time is ⏰ **{now.strftime('%I:%M %p')}**."
+    else:
+        # Generate AI response
+        chat = model.start_chat(history=[
+            {"role": msg["role"], "parts": [msg["content"]]} for msg in st.session_state.messages
+        ])
+        response = chat.send_message(user_input)
+        bot_reply = response.text
 
-    # If not special, use AI
-    if not response:
-        ai_response = model.generate_content(user_input)
-        response = ai_response.text
+    # Save bot reply
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
 
-    # Save bot response
-    st.session_state.messages.append({"role": "bot", "content": response})
-
-    # Refresh page to show new messages
-    st.rerun()
-
-# ✅ Check reminders
-for reminder_time in list(st.session_state.reminders):
-    if datetime.datetime.now() >= reminder_time:
-        st.session_state.messages.append({"role": "bot", "content": "⏰ Reminder Alert! (Beep Beep 🔔)"})
-        st.session_state.reminders.remove(reminder_time)
-        st.rerun()
+# Display chat messages (WhatsApp-style bubbles)
+for msg in st.session_state.messages:
+    if msg["role"] == "user":
+        st.markdown(f"<div style='text-align: right; background:#DCF8C6; padding:8px; border-radius:10px; margin:4px;'>{msg['content']}</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div style='text-align: left; background:#ECECEC; padding:8px; border-radius:10px; margin:4px;'>{msg['content']}</div>", unsafe_allow_html=True)
