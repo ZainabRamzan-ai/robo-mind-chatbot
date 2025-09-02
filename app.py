@@ -1,201 +1,70 @@
-# app.py — RoboMind Multilingual Chatbot (text + mic), business-tuned
-
-import os
-import base64
-import datetime
-import tempfile
 import streamlit as st
 import google.generativeai as genai
+import datetime
+import speech_recognition as sr
 
-# ---------- CONFIG ----------
-st.set_page_config(page_title="RoboMind AI", page_icon="🤖", layout="centered")
+# Configure API key
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# Secure API key (set in Streamlit Cloud: Settings → Secrets)
-API_KEY = st.secrets.get("GOOGLE_API_KEY", None)
-if not API_KEY:
-    st.error("Missing GOOGLE_API_KEY in Streamlit Secrets. Go to Manage app → Settings → Secrets.")
-    st.stop()
-
-genai.configure(api_key=API_KEY)
-
-# Business-tuned system prompt (multilingual, local context)
-SYSTEM_PROMPT = """
-You are RoboMind AI — a polite, concise, and practical assistant for Pakistani businesses.
-Core behaviors:
-- Detect the user's language (Urdu, Roman Urdu, Punjabi, Sindhi, English) and reply in the same language.
-- Be helpful for business use-cases (pricing, FAQs, service details, lead collection).
-- If asked for date/time/day, return the exact current value for Asia/Karachi.
-- Be brief but clear. Use bullet points for steps/checklists when helpful.
-- If user speaks via audio, first transcribe accurately then answer in the same language.
-"""
-
-# Gemini model (supports text + audio)
-model = genai.GenerativeModel(
-    "gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT
-)
-
-# ---------- STYLES ----------
-st.markdown("""
-<style>
-body { background: #F9FAFB; }
-.header {
-  background:#0A192F; color:#E2E8F0; padding:18px 20px; border-radius:16px;
-  display:flex; align-items:center; gap:12px; margin-bottom:12px;
-}
-.header h1 { font-size:20px; margin:0; }
-.header small { color:#94A3B8; }
-.bubble-user {
-  text-align:right; margin:6px 0;
-}
-.bubble-user span{
-  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
-  color:white; padding:12px 14px; border-radius:14px; display:inline-block; max-width:75%;
-  box-shadow:0 6px 18px rgba(79,70,229,0.25);
-  word-wrap:break-word; white-space:pre-wrap;
-}
-.bubble-bot {
-  text-align:left; margin:6px 0;
-}
-.bubble-bot span{
-  background: linear-gradient(135deg, #0ea5e9 0%, #10b981 100%);
-  color:white; padding:12px 14px; border-radius:14px; display:inline-block; max-width:75%;
-  box-shadow:0 6px 18px rgba(16,185,129,0.25);
-  word-wrap:break-word; white-space:pre-wrap;
-}
-.disclaimer {
-  font-size:12px; color:#64748B; margin-top:6px;
-}
-.toolbar {
-  display:flex; gap:8px; align-items:center; margin:6px 0 10px 0;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="header">
-  <div>🤖</div>
-  <div>
-    <h1>RoboMind AI — Smart Multilingual Chatbot</h1>
-    <small>Built for Pakistani businesses • Urdu / Punjabi / Sindhi / English • Text & Voice</small>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ---------- STATE ----------
+# Initialize chat history
 if "messages" not in st.session_state:
-    st.session_state.messages = []   # each: {"role": "user"|"assistant", "content": "text"}
+    st.session_state["messages"] = []
 
-# ---------- HELPERS ----------
-def show_message(text: str, role: str):
-    if role == "user":
-        st.markdown(f"<div class='bubble-user'><span>{text}</span></div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='bubble-bot'><span>{text}</span></div>", unsafe_allow_html=True)
+# Helper: Detect flood queries
+def is_flood_query(text):
+    keywords = ["flood", "barish", "selab", "flooding"]
+    return any(word in text.lower() for word in keywords)
 
-def special_date_time_answer(user_text: str) -> str | None:
-    """Return date/time/day answers for Asia/Karachi if the user asks."""
-    lower = user_text.lower()
-    if any(k in lower for k in ["time", "وقت"]):
-        now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5)))  # Asia/Karachi UTC+5
-        return f"⏰ {now.strftime('%I:%M %p')} (Asia/Karachi)"
-    if any(k in lower for k in ["date", "تاریخ", "tarikh"]):
-        today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5)))
-        return f"📅 {today.strftime('%A, %d %B %Y')} (Asia/Karachi)"
-    if any(k in lower for k in ["day", "آج کون سا دن", "din"]):
-        today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5)))
-        return f"📆 Today is {today.strftime('%A')} (Asia/Karachi)"
-    return None
+# Helper: Detect date/time queries
+def is_time_query(text):
+    keywords = ["date", "time", "waqt", "din", "roz"]
+    return any(word in text.lower() for word in keywords)
 
-def run_model_with_text(prompt: str) -> str:
-    chat = model.start_chat(history=[
-        {"role": m["role"], "parts": [m["content"]]} for m in st.session_state.messages
-    ])
-    resp = chat.send_message(prompt)
-    return resp.text
+# Page design
+st.title("🌐 RoboMind Chatbot")
+st.markdown("### Multilingual | Voice + Text | Smart Awareness")
 
-def run_model_with_audio(wav_path: str) -> str:
-    # Upload and let Gemini transcribe + respond
-    file = genai.upload_file(wav_path)
-    # Ask Gemini to transcribe and answer in same language
-    prompt = "Please transcribe this audio, then answer the user in the same language. If it’s a general query, respond helpfully."
-    resp = model.generate_content([file, prompt])
-    # Cleanup uploaded file reference (optional)
-    try:
-        genai.delete_file(file.name)
-    except Exception:
-        pass
-    return resp.text
+# Display chat history
+for msg in st.session_state["messages"]:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# ---------- UI: Microphone (record in browser) ----------
-# Uses streamlit-mic-recorder (add to requirements.txt)
-try:
-    from streamlit_mic_recorder import mic_recorder
-    mic_available = True
-except Exception:
-    mic_available = False
+# User input
+col1, col2 = st.columns([4, 1])
 
-with st.container():
-    st.markdown("<div class='toolbar'>", unsafe_allow_html=True)
-    col1, col2 = st.columns([1, 5], vertical_alignment="center")
-    with col1:
-        if mic_available:
-            audio = mic_recorder(
-                start_prompt="🎙️ Record",
-                stop_prompt="🛑 Stop",
-                just_once=False,
-                use_container_width=True,
-                key="mic"
-            )
-        else:
-            audio = None
-    with col2:
-        user_text = st.chat_input("Type your message… (or use mic)")
+with col1:
+    user_input = st.text_input("Type your message:", key="user_text")
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ---------- PROCESS: Text input ----------
-if user_text:
-    st.session_state.messages.append({"role": "user", "content": user_text})
-    show_message(user_text, "user")
-
-    # Date/Time smart answers first
-    dt = special_date_time_answer(user_text)
-    if dt:
-        bot = dt
-    else:
-        bot = run_model_with_text(user_text)
-
-    st.session_state.messages.append({"role": "assistant", "content": bot})
-    show_message(bot, "assistant")
-
-# ---------- PROCESS: Audio input ----------
-if mic_available and audio and isinstance(audio, dict) and audio.get("bytes"):
-    # Save temp wav, send to Gemini
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        tmp.write(audio["bytes"])
-        wav_path = tmp.name
-
-    # Show an inline "voice received" message
-    st.session_state.messages.append({"role": "user", "content": "🎤 (voice message sent) Translating…"})
-    show_message("🎤 (voice message sent) Translating…", "user")
-
-    try:
-        bot = run_model_with_audio(wav_path)
-    except Exception as e:
-        bot = "⚠️ Could not process audio. Please type your message instead."
-    finally:
+with col2:
+    if st.button("🎤 Speak"):
+        recognizer = sr.Recognizer()
+        with sr.Microphone() as source:
+            st.info("Listening...")
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
         try:
-            os.remove(wav_path)
-        except Exception:
-            pass
+            user_input = recognizer.recognize_google(audio, language="ur-PK")
+            st.success(f"Voice detected: {user_input}")
+        except:
+            st.error("Sorry, could not understand audio")
 
-    st.session_state.messages.append({"role": "assistant", "content": bot})
-    show_message(bot, "assistant")
+# Process input
+if user_input:
+    # Save user message
+    st.session_state["messages"].append({"role": "user", "content": user_input})
 
-# ---------- HISTORY RENDER (on first load) ----------
-if not (user_text or (mic_available and audio)):
-    for m in st.session_state.messages:
-        show_message(m["content"], m["role"])
+    if is_flood_query(user_input):
+        reply = "🌊 Flood Update: Severe floods in Punjab have displaced millions. Over 1M evacuated. Relief efforts ongoing."
+    elif is_time_query(user_input):
+        now = datetime.datetime.now()
+        reply = f"📅 Today is {now.strftime('%A, %d %B %Y')} | 🕒 Current time: {now.strftime('%I:%M %p')}"
+    else:
+        model = genai.GenerativeModel("gemini-pro")
+        response = model.generate_content(user_input)
+        reply = response.text
 
-st.markdown("<div class='disclaimer'>Tip: You can ask in Urdu/Punjabi/English. Try: \"آج کون سا دن ہے؟\" or \"Price list bhej do\".</div>", unsafe_allow_html=True)
+    # Save bot reply
+    st.session_state["messages"].append({"role": "assistant", "content": reply})
+
+    # Show bot reply
+    with st.chat_message("assistant"):
+        st.markdown(reply)
