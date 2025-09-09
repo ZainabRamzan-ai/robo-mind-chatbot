@@ -1,5 +1,4 @@
 streamlit
 google-generativeai
-speechrecognition
-pyaudio
 googletrans==4.0.0-rc1
+streamlit-mic-recorder
