@@ -1,9 +1,9 @@
-# app.py - RoboMind Chatbot v2 (Multilingual + Mic Support)
+# app.py - RoboMind Chatbot v2 (Multilingual + Mic Support, fixed translator)
 
 import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from streamlit_mic_recorder import speech_to_text
 
 # ------------------- CONFIG -------------------
@@ -12,8 +12,6 @@ st.set_page_config(page_title="RoboMind Chatbot", page_icon="🤖", layout="cent
 # Load Gemini API Key
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-1.5-flash")
-
-translator = Translator()
 
 # ------------------- APP HEADER -------------------
 st.markdown("<h1 style='text-align: center; color: #4CAF50;'>🤖 RoboMind Chatbot</h1>", unsafe_allow_html=True)
@@ -46,20 +44,17 @@ if mic_result and mic_result.strip() != "":
 
 # ------------------- PROCESS INPUT -------------------
 if user_input:
-    # Detect language
-    detected_lang = translator.detect(user_input).lang
-
     # Handle date/time locally
     if any(word in user_input.lower() for word in ["date", "time", "day", "waqt", "din", "تاریخ"]):
         now = datetime.now()
         bot_reply = f"📅 {now.strftime('%A, %d %B %Y')} ⏰ {now.strftime('%I:%M %p')}"
     else:
-        # Translate to English for Gemini
-        translated_input = translator.translate(user_input, src=detected_lang, dest="en").text
+        # Translate input to English for Gemini
+        translated_input = GoogleTranslator(source="auto", target="en").translate(user_input)
         response = model.generate_content(translated_input)
 
         # Translate back to user's language
-        bot_reply = translator.translate(response.text, src="en", dest=detected_lang).text
+        bot_reply = GoogleTranslator(source="en", target="auto").translate(response.text)
 
     # Save conversation
     st.session_state.messages.append({"role": "user", "content": user_input})
