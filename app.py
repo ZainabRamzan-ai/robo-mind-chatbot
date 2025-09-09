@@ -1,114 +1,73 @@
+# app.py - RoboMind Chatbot v2 (Multilingual + Mic Support)
+
 import streamlit as st
 import google.generativeai as genai
+from datetime import datetime
 from googletrans import Translator
-from streamlit_mic_recorder import mic_recorder
-import datetime
+from streamlit_mic_recorder import speech_to_text
 
-# ------------------ CONFIG ------------------
-st.set_page_config(page_title="RoboMind Chatbot", page_icon="🤖", layout="wide")
+# ------------------- CONFIG -------------------
+st.set_page_config(page_title="RoboMind Chatbot", page_icon="🤖", layout="centered")
 
-# Configure API key (set in Streamlit Secrets)
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+# Load Gemini API Key
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Translator
 translator = Translator()
 
-# Initialize session state
+# ------------------- APP HEADER -------------------
+st.markdown("<h1 style='text-align: center; color: #4CAF50;'>🤖 RoboMind Chatbot</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Your AI Assistant in Urdu, Punjabi, Sindhi, Pashto & English</p>", unsafe_allow_html=True)
+
+# ------------------- SESSION STATE -------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ------------------ HEADER ------------------
-st.markdown(
-    """
-    <style>
-    .chat-container {
-        max-width: 800px;
-        margin: auto;
-    }
-    .bubble-user {
-        text-align: right;
-        margin: 10px;
-    }
-    .bubble-user span {
-        background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
-        color: white;
-        padding: 12px 14px;
-        border-radius: 14px;
-        display: inline-block;
-        box-shadow: 0 6px 18px rgba(147,51,234,0.25);
-        word-wrap: break-word;
-        white-space: pre-wrap;
-    }
-    .bubble-bot {
-        text-align: left;
-        margin: 10px;
-    }
-    .bubble-bot span {
-        background: linear-gradient(135deg, #0ea5e9 0%, #10b981 100%);
-        color: white;
-        padding: 12px 14px;
-        border-radius: 14px;
-        display: inline-block;
-        box-shadow: 0 6px 18px rgba(16,185,129,0.25);
-        word-wrap: break-word;
-        white-space: pre-wrap;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.title("🤖 RoboMind Multilingual Chatbot")
-st.caption(f"Today's Date: {datetime.datetime.now().strftime('%A, %d %B %Y')}")
-
-# ------------------ MIC INPUT ------------------
-audio = mic_recorder(
-    start_prompt="🎤 Speak",
-    stop_prompt="⏹️ Stop",
-    just_once=True,
-    use_container_width=True,
-    key="recorder"
-)
-
-if audio:
-    text = audio["text"]
-    if text:
-        st.session_state.messages.append({"role": "user", "content": text})
-
-# ------------------ TEXT INPUT ------------------
-user_input = st.chat_input("Type your message...")
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
-# ------------------ PROCESS & REPLY ------------------
-if st.session_state.messages:
+# ------------------- CHAT BUBBLES -------------------
+def display_chat():
     for msg in st.session_state.messages:
         if msg["role"] == "user":
-            st.markdown(f"<div class='bubble-user'><span>{msg['content']}</span></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#DCF8C6;padding:10px;border-radius:10px;margin:5px;text-align:right;'>{msg['content']}</div>", unsafe_allow_html=True)
         else:
-            st.markdown(f"<div class='bubble-bot'><span>{msg['content']}</span></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#F1F0F0;padding:10px;border-radius:10px;margin:5px;text-align:left;'>{msg['content']}</div>", unsafe_allow_html=True)
 
-    # Only send last user message to Gemini
-    if st.session_state.messages[-1]["role"] == "user":
-        user_text = st.session_state.messages[-1]["content"]
+display_chat()
 
-        # Detect language & translate to English
-        detected = translator.detect(user_text)
-        if detected.lang != "en":
-            user_text = translator.translate(user_text, dest="en").text
+# ------------------- USER INPUT -------------------
+col1, col2 = st.columns([3,1])
+with col1:
+    user_input = st.text_input("Type your message:", key="input_text", label_visibility="collapsed")
+with col2:
+    st.write("")  # spacer
+    mic_result = speech_to_text(language="ur-PK", use_container_width=True, just_once=True, key="STT")
 
-        # Call Gemini API
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(user_text)
+if mic_result and mic_result.strip() != "":
+    user_input = mic_result
 
-        bot_reply = response.text
+# ------------------- PROCESS INPUT -------------------
+if user_input:
+    # Detect language
+    detected_lang = translator.detect(user_input).lang
 
-        # If original lang not English, translate back
-        if detected.lang != "en":
-            bot_reply = translator.translate(bot_reply, dest=detected.lang).text
+    # Handle date/time locally
+    if any(word in user_input.lower() for word in ["date", "time", "day", "waqt", "din", "تاریخ"]):
+        now = datetime.now()
+        bot_reply = f"📅 {now.strftime('%A, %d %B %Y')} ⏰ {now.strftime('%I:%M %p')}"
+    else:
+        # Translate to English for Gemini
+        translated_input = translator.translate(user_input, src=detected_lang, dest="en").text
+        response = model.generate_content(translated_input)
 
-        # Save bot reply
-        st.session_state.messages.append({"role": "bot", "content": bot_reply})
+        # Translate back to user's language
+        bot_reply = translator.translate(response.text, src="en", dest=detected_lang).text
 
-        # Show bot reply
-        st.markdown(f"<div class='bubble-bot'><span>{bot_reply}</span></div>", unsafe_allow_html=True)
+    # Save conversation
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.messages.append({"role": "bot", "content": bot_reply})
+
+    st.experimental_rerun()
+
+# ------------------- CLEAR CHAT -------------------
+if st.button("🗑️ Clear Chat"):
+    st.session_state.messages = []
+    st.experimental_rerun()
