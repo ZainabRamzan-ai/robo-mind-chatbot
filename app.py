@@ -1,130 +1,125 @@
+# app.py — RoboMind stable minimal chat (text-only, multi-language via system prompt)
+import os
+import re
+import datetime
+from zoneinfo import ZoneInfo
+
 import streamlit as st
 import google.generativeai as genai
-import datetime
-import speech_recognition as sr
-from googletrans import Translator
 
-# ==============================
-# CONFIGURATION
-# ==============================
-st.set_page_config(page_title="RoboMind Chatbot", layout="centered")
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-pro")
-translator = Translator()
+# -------------------- CONFIG --------------------
+st.set_page_config(page_title="RoboMind Chat", page_icon="🤖", layout="centered")
 
-# ==============================
-# SESSION STATE INIT
-# ==============================
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# API key (secure): Streamlit Secrets or environment variable fallback
+API_KEY = st.secrets.get("GOOGLE_API_KEY") if "GOOGLE_API_KEY" in st.secrets else os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    st.error("Missing API key. Add GOOGLE_API_KEY in Streamlit Secrets (Manage app → Settings → Secrets) or set env var.")
+    st.stop()
+genai.configure(api_key=API_KEY)
 
-if "user_input" not in st.session_state:
-    st.session_state.user_input = ""
+# Use a reliable Gemini model
+MODEL_NAME = "gemini-1.5-flash"
 
-# ==============================
-# STYLES
-# ==============================
-st.markdown("""
-<style>
-.user-msg {
-    background-color: #DCF8C6;
-    padding: 10px;
-    border-radius: 10px;
-    margin: 5px;
-    text-align: right;
-}
-.bot-msg {
-    background-color: #EDEDED;
-    padding: 10px;
-    border-radius: 10px;
-    margin: 5px;
-    text-align: left;
-}
-</style>
-""", unsafe_allow_html=True)
+# System prompt: instruct the model to detect language and reply in same language
+SYSTEM_PROMPT = """
+You are RoboMind — a concise, practical AI assistant for Pakistani users and businesses.
+Behaviors:
+- Detect user's language (Urdu, Punjabi, Sindhi, Pashto, Saraiki, English, Hindi).
+- Always reply in the same language the user used.
+- If user asks for the current date/time/day, answer using Asia/Karachi timezone (explicitly).
+- Be brief and give practical next steps for business/market questions.
+- When asked for live news or updates (e.g., 'floods', 'latest news'), reply: "I can fetch live headlines if you allow 'news' mode." (we'll add live news later).
+"""
 
-# ==============================
-# FUNCTIONS
-# ==============================
-def detect_and_translate(text, target="en"):
-    """Detect language and translate if needed."""
-    detected = translator.detect(text).lang
-    if detected != target:
-        translated = translator.translate(text, src=detected, dest=target)
-        return translated.text, detected
-    return text, detected
+# -------------------- HELPERS --------------------
+def now_in_karachi():
+    tz = ZoneInfo("Asia/Karachi")
+    return datetime.datetime.now(tz)
 
-def record_voice():
-    """Capture audio from microphone and return text."""
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.info("🎤 Listening... please speak.")
-        audio = r.listen(source)
+def is_datetime_query(text: str) -> bool:
+    pattern = re.compile(r"\b(time|date|day|waqt|tarikh|aaj|کیا وقت|کیا تاریخ)\b", re.IGNORECASE)
+    return bool(pattern.search(text or ""))
+
+def safe_generate(prompt: str, system_prompt: str = SYSTEM_PROMPT, model_name: str = MODEL_NAME):
+    """
+    Call Gemini safely and return string text. Handles different response shapes defensively.
+    """
     try:
-        return r.recognize_google(audio, language="ur-PK")  # Urdu by default
-    except:
-        return "Sorry, I could not understand the audio."
+        model = genai.GenerativeModel(model_name)
+        # Send system + user as list of texts so the model sees the system instruction
+        resp = model.generate_content([{"text": system_prompt}, {"text": prompt}])
+    except Exception as e:
+        # Catch and show a friendly message (but return a string)
+        return f"⚠️ Model request failed: {str(e)}"
 
-def handle_bot_response(user_text):
-    """Generate a bot response with special cases for date/time."""
-    lower_text = user_text.lower()
+    # Extract text robustly
+    # Newer responses often have `.text`; older structures may have `candidates`.
+    if hasattr(resp, "text") and resp.text:
+        return resp.text
+    if getattr(resp, "candidates", None):
+        try:
+            # nested structure: candidates[0].content[0].text
+            return resp.candidates[0].content[0].text
+        except Exception:
+            try:
+                return resp.candidates[0].content.parts[0].text
+            except Exception:
+                return str(resp)
+    return str(resp)
 
-    # Date/time handling
-    if "date" in lower_text or "day" in lower_text:
-        return f"📅 Today is {datetime.datetime.now().strftime('%A, %d %B %Y (%I:%M %p)')}"
-    if "time" in lower_text:
-        return f"⏰ Current time: {datetime.datetime.now().strftime('%I:%M %p')}"
+# -------------------- SESSION --------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []  # list of dicts: {"role":"user"/"assistant", "text": "...", "ts": timestamp}
 
-    # AI model response
-    response = model.generate_content(user_text)
-    return response.text
+# -------------------- UI --------------------
+st.title("🤖 RoboMind — Stable Chat")
+st.caption("Text-first. Multilingual support via model instructions. (Mic/TTS will be added after this is stable.)")
+st.markdown("---")
 
-# ==============================
-# INTERFACE
-# ==============================
-st.title("🤖 RoboMind Chatbot")
-st.caption("Multilingual | Voice-enabled | Smart date & time answers")
-
-# Display chat history
-for chat in st.session_state.chat_history:
-    if chat["role"] == "user":
-        st.markdown(f"<div class='user-msg'>{chat['content']}</div>", unsafe_allow_html=True)
+# Conversation area
+for m in st.session_state.messages:
+    if m["role"] == "user":
+        st.markdown(f"<div style='text-align:right; background:linear-gradient(90deg,#6b46c1,#4f46e5); color:white; padding:10px; border-radius:12px; margin:6px 0;'> {m['text']} </div>", unsafe_allow_html=True)
     else:
-        st.markdown(f"<div class='bot-msg'>{chat['content']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:left; background:linear-gradient(90deg,#06b6d4,#10b981); color:#05121f; padding:10px; border-radius:12px; margin:6px 0;'> {m['text']} </div>", unsafe_allow_html=True)
 
 # Input area
-col1, col2 = st.columns([3,1])
+user_text = st.text_input("Type your message (or ask date/time):", key="input_text")
+
+# Buttons row
+col1, col2, col3 = st.columns([1,1,1])
 with col1:
-    user_input = st.text_input("💬 Type your message:", value=st.session_state.user_input, key="input")
+    send = st.button("Send")
 with col2:
-    if st.button("🎤 Speak"):
-        voice_text = record_voice()
-        if voice_text:
-            st.session_state.user_input = voice_text
+    clear = st.button("Clear Chat")
+with col3:
+    show_dt = st.button("Show Date/Time")
 
-# Send button
-if st.button("Send"):
-    if st.session_state.user_input.strip():
-        translated_text, detected_lang = detect_and_translate(st.session_state.user_input, target="en")
+if clear:
+    st.session_state.messages = []
 
-        # Add user message
-        st.session_state.chat_history.append({"role": "user", "content": st.session_state.user_input})
+if show_dt:
+    dt = now_in_karachi()
+    txt = f"📅 {dt.strftime('%A, %d %B %Y')}  ⏰ {dt.strftime('%I:%M %p')}"
+    st.session_state.messages.append({"role":"assistant","text":txt,"ts": datetime.datetime.utcnow().isoformat()})
 
-        # Generate bot response
-        bot_reply = handle_bot_response(translated_text)
+if send and user_text and user_text.strip():
+    st.session_state.messages.append({"role":"user","text":user_text.strip(),"ts": datetime.datetime.utcnow().isoformat()})
 
-        # Translate back to original language if not English
-        if detected_lang != "en":
-            bot_reply = translator.translate(bot_reply, src="en", dest=detected_lang).text
+    # 1) If the user explicitly asks for date/time -> reply locally (fast, accurate)
+    if is_datetime_query(user_text):
+        dt = now_in_karachi()
+        reply = f"📅 {dt.strftime('%A, %d %B %Y')}  ⏰ {dt.strftime('%I:%M %p')}"
+        st.session_state.messages.append({"role":"assistant","text":reply,"ts": datetime.datetime.utcnow().isoformat()})
+    else:
+        # 2) Normal AI flow — ask Gemini to detect language and answer in same language
+        # We send only the user message as prompt (system prompt guides language behavior)
+        reply = safe_generate(user_text)
+        st.session_state.messages.append({"role":"assistant","text":reply,"ts": datetime.datetime.utcnow().isoformat()})
 
-        # Add bot response
-        st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+# Keep input cleared after send for ux
+if send:
+    st.session_state.input_text = ""
 
-        # Clear input field
-        st.session_state.user_input = ""
-
-# ==============================
-# FOOTER
-# ==============================
 st.markdown("---")
-st.caption("⚡ Powered by RoboMind Solution | Multilingual AI Chatbot for Pakistan")
+st.caption("If this runs with no errors, tell me and I'll add optional mic + TTS next.")
