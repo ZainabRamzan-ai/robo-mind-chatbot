@@ -1,4 +1,2 @@
-streamlit
-google-generativeai
-deep-translator
-streamlit-mic-recorder
+streamlit==1.48.1
+google-generativeai==0.8.5
