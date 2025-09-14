@@ -1,2 +1,5 @@
-streamlit==1.48.1
-google-generativeai==0.8.5
+streamlit
+google-generativeai
+deep-translator
+SpeechRecognition
+pyaudio
